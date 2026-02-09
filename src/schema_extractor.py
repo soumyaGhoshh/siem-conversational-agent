@@ -1,12 +1,17 @@
 import requests
 import json
 import os
+import logging
 
 # Configuration
 ELASTIC_URL = os.getenv("ELASTIC_URL", "https://localhost:9200")
-ELASTIC_USER = os.getenv("ELASTIC_USER", "admin")
-ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD", "SecretPassword1!")
-VERIFY_SSL = False
+ELASTIC_USER = os.getenv("ELASTIC_USER")
+ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
+REQUEST_TIMEOUT = int(os.getenv("ELASTIC_REQUEST_TIMEOUT", "20"))
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def get_index_mapping(index_pattern):
     """
@@ -14,16 +19,21 @@ def get_index_mapping(index_pattern):
     """
     url = f"{ELASTIC_URL}/{index_pattern}/_mapping"
     try:
+        if not ELASTIC_USER or not ELASTIC_PASSWORD:
+            raise ValueError("ELASTIC_USER/ELASTIC_PASSWORD environment variables are not set.")
         response = requests.get(
-            url, 
-            auth=(ELASTIC_USER, ELASTIC_PASSWORD), 
+            url,
+            auth=(ELASTIC_USER, ELASTIC_PASSWORD),
             verify=VERIFY_SSL,
-            timeout=10
+            timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching mapping for {index_pattern}: {e}")
+        logger.error(f"Error fetching mapping for {index_pattern}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Configuration error: {e}")
         return None
 
 def simplify_mapping(mapping_data):
@@ -63,7 +73,7 @@ def simplify_mapping(mapping_data):
 def save_schema(schema, filename="schema.json"):
     with open(filename, "w") as f:
         json.dump(schema, f, indent=2)
-    print(f"Schema saved to {filename}")
+    logger.info(f"Schema saved to {filename}")
 
 if __name__ == "__main__":
     import urllib3
@@ -76,4 +86,4 @@ if __name__ == "__main__":
         simple_schema = simplify_mapping(mapping)
         save_schema(simple_schema, "wazuh_schema.json")
     else:
-        print("Failed to retrieve mapping.")
+        logger.error("Failed to retrieve mapping.")
