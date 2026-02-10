@@ -39,7 +39,7 @@ def within_max_lookback(dsl, max_days=7):
         return False
     return False
 
-def validate_dsl(dsl, schema_fields, types_map=None, max_days=7):
+def validate_dsl(dsl, schema_fields, types_map=None, max_days=7, analyzers_map=None):
     errors = []
     if not isinstance(dsl, dict):
         errors.append("DSL must be an object")
@@ -71,6 +71,11 @@ def validate_dsl(dsl, schema_fields, types_map=None, max_days=7):
                                 errors.append(f"Operator {k} not allowed for type {t} on field {f}")
                             if k == "wildcard" and types_map and types_map.get(f) not in ("keyword", "text"):
                                 errors.append(f"Wildcard only permitted on keyword/text: {f}")
+                            if t == "keyword" and k == "match":
+                                errors.append("Match not appropriate for keyword fields")
+                            if analyzers_map and analyzers_map.get(f):
+                                if k == "wildcard":
+                                    errors.append("Wildcard not allowed on analyzed text fields")
                 elif k == "range":
                     if isinstance(v, dict):
                         for f in v.keys():
@@ -78,8 +83,10 @@ def validate_dsl(dsl, schema_fields, types_map=None, max_days=7):
                                 errors.append(f"Unknown field: {f}")
                             if types_map and types_map.get(f) not in ("date", "integer", "long", "float", "double"):
                                 errors.append(f"Range only on date/numeric: {f}")
-                            if f != "@timestamp" and types_map and types_map.get(f) == "date" and f != "@timestamp":
+                            if f != "@timestamp":
                                 errors.append("Date range only allowed on @timestamp")
+                            if types_map and types_map.get(f) == "nested":
+                                errors.append("Nested field requires nested query context")
                 else:
                     check_fields(v)
         elif isinstance(obj, list):
@@ -96,7 +103,6 @@ def validate_dsl(dsl, schema_fields, types_map=None, max_days=7):
         errors.append("Invalid size")
     sort = dsl.get("sort")
     if sort:
-        # Disallow sort on non-date unless keyword/text, and only ascending/descending simple sorts
         try:
             items = sort if isinstance(sort, list) else [sort]
             for it in items:
@@ -107,6 +113,9 @@ def validate_dsl(dsl, schema_fields, types_map=None, max_days=7):
                         t = types_map.get(f) if types_map else None
                         if t not in ("date", "keyword", "text"):
                             errors.append(f"Sort not allowed on field type {t}: {f}")
+                        sz = dsl.get("size", 0)
+                        if t in ("keyword", "text") and (not dsl.get("aggs") and (sz is None or sz > 100)):
+                            errors.append("Sort on text/keyword without aggs and size>100 not allowed")
         except Exception:
             errors.append("Invalid sort specification")
     return len(errors) == 0, errors
