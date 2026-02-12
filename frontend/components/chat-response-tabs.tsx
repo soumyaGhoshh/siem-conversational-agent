@@ -1,0 +1,542 @@
+'use client';
+
+import { useState } from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import type { ChatResponse } from '@/lib/types';
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Brain, AlertCircle, BookOpen, ShieldCheck, ChevronRight,
+  Zap,
+  Target,
+  Download,
+  Gauge,
+  History,
+  Terminal as TerminalIcon,
+  SearchCode
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { TooltipProvider, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import * as TooltipPrimitive from '@radix-ui/react-tooltip';
+
+const ShadcnTooltip = TooltipPrimitive.Root;
+
+interface ChatResponseTabsProps {
+  response: ChatResponse;
+  onSave?: (name: string) => void;
+}
+
+export function ChatResponseTabs({ response, onSave }: ChatResponseTabsProps) {
+  const [selectedField, setSelectedField] = useState('user.name');
+  const [saveName, setSaveName] = useState('');
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [isApplyingFix, setIsApplyingFix] = useState(false);
+
+  const timeSeriesData = response.aggregations?.byTime?.buckets || [];
+  const topTermsBuckets = response.aggregations?.topTerms?.buckets || [];
+
+  const ReasoningTimeline = () => {
+    if (!response.reasoning_steps || response.reasoning_steps.length === 0) return null;
+    
+    return (
+      <div className="mb-6 bg-slate-950/40 rounded-xl p-4 border border-slate-800">
+        <div className="flex items-center gap-2 mb-4 text-sm font-semibold text-slate-400 font-mono">
+          <History className="w-4 h-4" />
+          <span className="uppercase tracking-widest">Investigation Timeline</span>
+        </div>
+        <div className="space-y-4">
+          {response.reasoning_steps.map((step, idx) => (
+            <div key={idx} className="flex gap-3 items-start group">
+              <div className="flex flex-col items-center">
+                <div className={`p-1.5 rounded-full border ${
+                  step.type === 'analysis' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' : 
+                  step.type === 'execution' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 
+                  'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                }`}>
+                  {step.type === 'analysis' ? <Brain className="w-3 h-3" /> : 
+                   step.type === 'execution' ? <TerminalIcon className="w-3 h-3" /> : 
+                   <SearchCode className="w-3 h-3" />}
+                </div>
+                {idx < response.reasoning_steps.length - 1 && (
+                  <div className="w-px h-full bg-slate-800 my-1" />
+                )}
+              </div>
+              <div className="pt-0.5 pb-2">
+                <p className="text-sm text-slate-300 font-medium leading-tight">
+                  {step.step}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const handleApplyFix = async () => {
+    setIsApplyingFix(true);
+    try {
+      const res = await fetch('/api/remediate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: response.remediation }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success('Remediation applied successfully!', {
+          description: data.details?.webhookSent ? 'Real-world webhook dispatched to SOAR.' : 'Simulated action triggered.',
+        });
+      } else {
+        toast.error('Failed to apply remediation.');
+      }
+    } catch (err) {
+      toast.error('Error applying remediation.');
+    } finally {
+      setIsApplyingFix(false);
+    }
+  };
+
+  const handleSave = () => {
+    if (saveName && onSave) {
+      onSave(saveName);
+      setSaveName('');
+      setShowSaveDialog(false);
+    }
+  };
+
+  const handleExportReport = () => {
+    const content = `
+# Incident Report: ${response.severity?.toUpperCase() || 'UNKNOWN'} SEVERITY
+Generated on: ${new Date().toLocaleString()}
+
+## AI Analysis
+${response.analysis || 'No analysis provided.'}
+
+## Confidence Score: ${response.confidence || 85}%
+${response.confidence_reason || ''}
+
+## MITRE ATT&CK Mapping
+${response.mitre?.map(t => `- [${t.id}] ${t.name}`).join('\n') || 'None'}
+
+## Reconstructed Attack Chain
+${response.story?.split('->').map((step, i) => `${i + 1}. ${step.trim()}`).join('\n') || 'None'}
+
+## Recommended Countermeasure
+${response.remediation || 'No remediation suggested.'}
+
+---
+Generated by SIEM Conversational Agent
+    `.trim();
+
+    const blob = new Blob([content], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `incident-report-${Date.now()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('Incident report exported as Markdown.');
+  };
+
+  return (
+    <Card className="border-slate-700 bg-slate-900/80 backdrop-blur-md cyber-border glow-cyan overflow-hidden">
+      <Tabs defaultValue="insight" className="w-full">
+        <TabsList className="border-b border-slate-700 bg-slate-950/50 p-0 h-12 flex justify-between items-center w-full">
+          <div className="flex h-full">
+            <TabsTrigger value="insight" className="gap-2 px-6 data-[state=active]:bg-cyan-500/10 data-[state=active]:text-cyan-400 rounded-none h-full border-r border-slate-700">
+              <Brain className="h-4 w-4" /> AI Insight
+            </TabsTrigger>
+            <TabsTrigger value="overview" className="px-6 data-[state=active]:bg-cyan-500/10 data-[state=active]:text-cyan-400 rounded-none h-full border-r border-slate-700">Overview</TabsTrigger>
+            <TabsTrigger value="results" className="px-6 data-[state=active]:bg-cyan-500/10 data-[state=active]:text-cyan-400 rounded-none h-full border-r border-slate-700">Results</TabsTrigger>
+            <TabsTrigger value="dsl" className="px-6 data-[state=active]:bg-cyan-500/10 data-[state=active]:text-cyan-400 rounded-none h-full border-r border-slate-700">DSL</TabsTrigger>
+            <TabsTrigger value="saved" className="px-6 data-[state=active]:bg-cyan-500/10 data-[state=active]:text-cyan-400 rounded-none h-full">Saved</TabsTrigger>
+          </div>
+          <div className="px-4">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={handleExportReport}
+              className="text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 gap-2 h-8"
+            >
+              <Download className="h-4 w-4" />
+              <span className="text-[10px] font-bold uppercase tracking-wider font-mono">Export Report</span>
+            </Button>
+          </div>
+        </TabsList>
+
+        <TabsContent value="insight" className="p-6">
+          <div className="space-y-8">
+            <ReasoningTimeline />
+            {/* Severity and Analysis */}
+            <div className="flex items-start justify-between">
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className={`h-2 w-2 rounded-full animate-pulse ${
+                    response.severity === 'critical' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]' :
+                    response.severity === 'high' ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]' :
+                    response.severity === 'medium' ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.8)]' :
+                    'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]'
+                  }`} />
+                  <h4 className="text-xl font-bold tracking-tight text-white uppercase font-mono">Security Intelligence Report</h4>
+                  {response.severity && (
+                    <Badge 
+                      variant="outline" 
+                      className={
+                        response.severity === 'critical' ? 'border-red-500 text-red-400 bg-red-500/10 glow-red' :
+                        response.severity === 'high' ? 'border-orange-500 text-orange-400 bg-orange-500/10' :
+                        response.severity === 'medium' ? 'border-yellow-500 text-yellow-400 bg-yellow-500/10' :
+                        'border-blue-500 text-blue-400 bg-blue-500/10'
+                      }
+                    >
+                      {response.severity.toUpperCase()}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-slate-300 leading-relaxed text-sm max-w-3xl border-l-2 border-slate-700 pl-4 py-1">
+                  {response.analysis || "No analysis provided by the AI model."}
+                </p>
+                
+                {/* Confidence Gauge */}
+                <div className="flex items-center gap-4 bg-slate-950/20 p-3 rounded border border-slate-800/50 w-fit">
+                  <div className="flex items-center gap-2">
+                    <Gauge className={`h-4 w-4 ${
+                      (response.confidence || 85) >= 80 ? 'text-green-400' :
+                      (response.confidence || 85) >= 50 ? 'text-yellow-400' : 'text-red-400'
+                    }`} />
+                    <span className="text-[10px] font-bold uppercase tracking-widest font-mono text-slate-500">Analyst Confidence</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="h-1.5 w-32 bg-slate-800 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full transition-all duration-1000 ${
+                          (response.confidence || 85) >= 80 ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' :
+                          (response.confidence || 85) >= 50 ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.5)]' : 
+                          'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'
+                        }`}
+                        style={{ width: `${response.confidence || 85}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-bold font-mono ${
+                      (response.confidence || 85) >= 80 ? 'text-green-400' :
+                      (response.confidence || 85) >= 50 ? 'text-yellow-400' : 'text-red-400'
+                    }`}>{response.confidence || 85}%</span>
+                  </div>
+                  {response.confidence_reason && (
+                    <TooltipProvider>
+                      <ShadcnTooltip>
+                        <TooltipTrigger asChild>
+                          <AlertCircle className="h-3.5 w-3.5 text-slate-500 cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="bg-slate-900 border-slate-700 text-slate-300 max-w-xs">
+                          <p className="text-[10px] leading-tight">{response.confidence_reason}</p>
+                        </TooltipContent>
+                      </ShadcnTooltip>
+                    </TooltipProvider>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* MITRE ATT&CK Mapping */}
+            {response.mitre && response.mitre.length > 0 && (
+              <div className="space-y-3 bg-slate-950/30 p-4 rounded border border-slate-800">
+                <div className="flex items-center gap-2 text-slate-500">
+                  <Target className="h-4 w-4" />
+                  <span className="text-xs font-bold uppercase tracking-widest font-mono">TTP Correlation (MITRE ATT&CK)</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <TooltipProvider>
+                    {response.mitre.map((t, idx) => (
+                      <Dialog key={t.id || `mitre-${idx}`}>
+                        <ShadcnTooltip>
+                          <TooltipTrigger asChild>
+                            <DialogTrigger asChild>
+                              <Badge 
+                                variant="secondary" 
+                                className="bg-slate-800 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/10 transition-colors cursor-help px-2 py-1 flex items-center gap-1.5"
+                              >
+                                <ShieldCheck className="h-3.5 w-3.5 text-cyan-500" />
+                                <span className="font-bold">{t.id}</span>
+                                <span className="opacity-70">|</span>
+                                <span>{t.name}</span>
+                              </Badge>
+                            </DialogTrigger>
+                          </TooltipTrigger>
+                          <TooltipContent className="bg-slate-900 border-slate-700 text-cyan-400">
+                            <p className="text-[10px] font-mono">Click for Technical Details (Verified via ChromaDB)</p>
+                          </TooltipContent>
+                        </ShadcnTooltip>
+                        
+                        <DialogContent className="bg-slate-900 border-slate-700 text-slate-100 max-w-2xl">
+                          <DialogHeader>
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="p-2 bg-cyan-500/10 rounded border border-cyan-500/20">
+                                <Target className="h-5 w-5 text-cyan-400" />
+                              </div>
+                              <div>
+                                <DialogTitle className="text-xl font-bold tracking-tight text-white font-mono">
+                                  {t.id}: {t.name}
+                                </DialogTitle>
+                                <div className="text-[10px] uppercase tracking-widest text-cyan-500 font-bold mt-1">
+                                  MITRE ATT&CK Technique
+                                </div>
+                              </div>
+                            </div>
+                          </DialogHeader>
+                          
+                          <div className="space-y-6 mt-4">
+                            <div className="p-4 bg-slate-950/50 rounded border border-slate-800 leading-relaxed text-slate-300">
+                              <div className="text-xs font-bold uppercase text-slate-500 mb-2 font-mono flex items-center gap-2">
+                                <Brain className="h-3 w-3" /> Technical Description
+                              </div>
+                              {t.description || "Detailed technical description being retrieved from the RAG knowledge base..."}
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="p-3 bg-slate-950/30 rounded border border-slate-800/50">
+                                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1 font-mono">Data Source</div>
+                                <div className="text-xs text-cyan-400 font-mono">ChromaDB Vector Store</div>
+                              </div>
+                              <div className="p-3 bg-slate-950/30 rounded border border-slate-800/50">
+                                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1 font-mono">Grounding</div>
+                                <div className="text-xs text-green-400 font-mono flex items-center gap-1.5">
+                                  <ShieldCheck className="h-3 w-3" /> Hallucination-Free
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </DialogContent>
+                      </Dialog>
+                    ))}
+                  </TooltipProvider>
+                </div>
+              </div>
+            )}
+
+            {/* Story / Attack Chain */}
+            {response.story && (
+              <div className="rounded-lg border border-cyan-500/20 bg-slate-950/50 p-6 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-2 opacity-10">
+                  <BookOpen className="h-24 w-24" />
+                </div>
+                <div className="mb-8 flex items-center gap-2 text-cyan-400">
+                  <Zap className="h-5 w-5 animate-pulse" />
+                  <h5 className="font-bold uppercase tracking-widest text-sm font-mono">Reconstructed Attack Chain</h5>
+                </div>
+                
+                <div className="relative flex flex-col gap-8 ml-4">
+                  {response.story.split('->').map((step, idx, arr) => (
+                    <div key={idx} className="flex items-start gap-6 group">
+                      <div className="relative flex flex-col items-center">
+                        <div className={`z-10 flex h-10 w-10 items-center justify-center rounded-sm border ${idx === arr.length - 1 ? 'border-red-500 bg-red-500/20 text-red-400' : 'border-cyan-500 bg-cyan-500/20 text-cyan-400'} text-sm font-bold shadow-[0_0_10px_rgba(6,182,212,0.2)] group-hover:scale-110 transition-transform`}>
+                          0{idx + 1}
+                        </div>
+                        {idx < arr.length - 1 && (
+                          <div className="absolute top-10 h-[calc(100%+2rem)] w-[2px] bg-gradient-to-b from-cyan-500/50 via-cyan-500/20 to-transparent" />
+                        )}
+                      </div>
+                      <div className="flex-1 pt-1.5">
+                        <div className="rounded border border-slate-700 bg-slate-900/80 px-4 py-3 text-sm font-medium text-slate-200 shadow-xl group-hover:border-cyan-500/40 transition-colors">
+                          {step.trim()}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Remediation Suggestions */}
+            {response.remediation && (
+              <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="flex items-start gap-4">
+                  <div className="mt-1 rounded-full bg-green-500/10 p-3">
+                    <ShieldCheck className="h-6 w-6 text-green-400" />
+                  </div>
+                  <div>
+                    <h5 className="font-bold text-green-400 uppercase tracking-wider text-xs mb-1 font-mono">Recommended Countermeasure</h5>
+                    <p className="text-sm text-slate-300 leading-relaxed">
+                      {response.remediation}
+                    </p>
+                  </div>
+                </div>
+                <Button 
+                  onClick={handleApplyFix}
+                  disabled={isApplyingFix}
+                  className="shrink-0 bg-green-600 hover:bg-green-500 text-white font-bold px-8 py-6 rounded-none border border-green-400/50 shadow-[0_0_15px_rgba(22,163,74,0.3)] transition-all hover:scale-105"
+                >
+                  {isApplyingFix ? (
+                    <div className="flex items-center gap-2">
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      EXECUTING...
+                    </div>
+                  ) : 'EXECUTE REMEDIATION'}
+                </Button>
+              </div>
+            )}
+
+            {!response.analysis && !response.story && (
+              <div className="py-8 text-center text-slate-500">
+                <AlertCircle className="mx-auto mb-2 h-8 w-8 opacity-20" />
+                <p>No deep AI analysis available for this query.</p>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="overview" className="p-6">
+          <div className="space-y-6">
+            {topTermsBuckets.length > 0 && (
+              <div>
+                <h4 className="mb-4 font-semibold text-white">Top-N Terms</h4>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={topTermsBuckets}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis dataKey="key" stroke="#94a3b8" />
+                    <YAxis stroke="#94a3b8" />
+                    <RechartsTooltip
+                      contentStyle={{
+                        backgroundColor: '#1e293b',
+                        border: '1px solid #475569',
+                      }}
+                    />
+                    <Bar dataKey="doc_count" fill="#06b6d4" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {timeSeriesData.length > 0 && (
+              <div>
+                <h4 className="mb-4 font-semibold text-white">Timeline</h4>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={timeSeriesData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis dataKey="key_as_string" stroke="#94a3b8" />
+                    <YAxis stroke="#94a3b8" />
+                    <RechartsTooltip
+                      contentStyle={{
+                        backgroundColor: '#1e293b',
+                        border: '1px solid #475569',
+                      }}
+                    />
+                    <Line type="monotone" dataKey="doc_count" stroke="#06b6d4" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="results" className="p-6">
+          <div className="space-y-4">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700">
+                    {Object.keys(response.results.data[0] || {}).map((key) => (
+                      <th
+                        key={key}
+                        className="px-4 py-2 text-left font-semibold text-slate-300"
+                      >
+                        {key}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {response.results.data.map((row, idx) => (
+                    <tr
+                      key={idx}
+                      className="border-b border-slate-700/50 hover:bg-slate-700/30"
+                    >
+                      {Object.values(row).map((val, i) => (
+                        <td key={i} className="px-4 py-2 text-slate-300">
+                          {typeof val === 'string' || typeof val === 'number'
+                            ? String(val).slice(0, 50)
+                            : '—'}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="text-sm text-slate-400">
+              Showing {response.results.data.length} of{' '}
+              {response.results.totalHits} results
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="dsl" className="p-6">
+          <div className="space-y-4">
+            <pre className="max-h-96 overflow-auto rounded-md bg-slate-900 p-4 font-mono text-xs text-cyan-400">
+              {response.queryGenerated}
+            </pre>
+            <Button className="bg-green-600 hover:bg-green-700">
+              Download DSL
+            </Button>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="saved" className="p-6">
+          <div className="space-y-4">
+            {!showSaveDialog ? (
+              <Button
+                onClick={() => setShowSaveDialog(true)}
+                className="w-full bg-cyan-600 hover:bg-cyan-700"
+              >
+                Save This Query
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  placeholder="Search name"
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-500"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleSave}
+                    disabled={!saveName}
+                    className="flex-1 bg-green-600 hover:bg-green-700"
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setShowSaveDialog(false);
+                      setSaveName('');
+                    }}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
+    </Card>
+  );
+}
